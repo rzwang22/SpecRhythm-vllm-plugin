@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vllm-specrhythm"
+version = "0.1.0"
+description = "SpecRhythm research plugin for heterogeneous SLO-aware speculative decoding in vLLM."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+vllm = [
+  "vllm==0.23.0",
+]
+dev = [
+  "ruff>=0.6.0",
+]
+
+[project.entry-points."vllm.general_plugins"]
+specrhythm = "vllm_specrhythm.plugin:register"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"

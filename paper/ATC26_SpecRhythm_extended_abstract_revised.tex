@@ -1,0 +1,106 @@
+\documentclass[sigplan,10pt,review,nonacm,anonymous]{acmart}
+
+\renewcommand\footnotetextcopyrightpermission[1]{}
+\settopmatter{printfolios=true,printacmref=false}
+
+\newcommand{\system}{SpecRhythm}
+\newcommand{\tpot}{TPOT}
+\newcommand{\goodput}{SLO-constrained goodput}
+
+\begin{document}
+
+\title{Enabling High-Goodput LLM Inference Serving with Heterogeneous SLO-Aware Speculative Decoding}
+\author{Anonymous Author(s)}
+
+\pagestyle{plain}
+\maketitle
+
+\section*{Motivation}
+
+Modern large language model (LLM) serving is becoming shared infrastructure for applications with different latency needs. Interactive dialogue and code completion require a steady stream of generated tokens, while document processing and complex reasoning can usually tolerate slower output. These workloads are often multiplexed on the same GPU cluster, so a serving system must support heterogeneous time-per-output-token (\tpot) service-level objectives (SLOs), rather than forcing every request to advance at the same rate.
+
+For streaming generation, \tpot captures the sustained decoding pace after the first token. A request with target $\tau_i$ is useful to the service only when its actual per-token decoding time stays within that target. We therefore view each active request as having both a latency slack and a token-progress demand: relaxed requests can wait for ordinary batch progress, but tight requests need earlier or larger progress before their accumulated decoding time exceeds the SLO. This creates a resource allocation problem inside each decoding cycle, not just a GPU utilization problem.
+
+This heterogeneity changes the serving objective from raw throughput to \goodput. Continuous batching improves GPU utilization by advancing many requests together~\cite{vllm}, but it provides little control over which requests make timely progress. When tight-SLO and relaxed-SLO requests share a batch, uniform progress can spend decoding capacity on requests with ample slack while latency-critical requests fall behind. As illustrated in Figure~\ref{fig:motivation}, speculative decoding exposes a more flexible progress knob: a request can receive multiple draft tokens in one iteration and may advance by several accepted tokens after target-model verification. The challenge is to use this knob without increasing batch latency or wasting speculative work.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{figures/fig1.pdf}
+\caption{Motivation for SLO-aware speculative serving. Continuous batching advances heterogeneous requests uniformly, whereas speculative decoding exposes request-level progress as a controllable resource.}
+\vspace{-8pt}
+\label{fig:motivation}
+\end{figure}
+
+\section*{Limitations of Current Approaches}
+
+Existing SLO-aware speculative serving systems customize speculative budgets across requests~\cite{adaspec,adaserve}, but they largely retain a serial draft-then-verify execution structure. This creates a latency-progress dilemma under batched serving. If the system bounds the total batch-level speculative budget, each request receives less speculative opportunity as batch size grows. If each request keeps an aggressive budget, drafting and verification costs grow with batch size and increase the iteration latency for all requests. In our controlled experiments, increasing active batch size from 8 to 64 reduces the mean accepted tokens per request from 4.1 to 1.7 under bounded speculative capacity, showing that serial budget scaling cannot sustain timely progress under high concurrency.
+
+Asynchronous parallel speculative decoding attempts to hide draft latency by drafting ahead while the target model verifies the current speculative sequence~\cite{pearl,swift}. This overlap is useful, but hidden draft work remains conditional on the current prefix being accepted. If target verification rejects part of the current prefix, continuations generated from that unconfirmed prefix become invalid and must be discarded. In our experiments with draft length 4, only 32.4\% of hidden draft tokens are accepted; 38.4\% are invalidated by prefix rejection, and another 29.2\% are rejected during verification. More importantly, existing parallel mechanisms optimize overlap efficiency rather than deciding how hidden drafting capacity should be distributed across requests with different SLO urgency. As batch size grows, tight-SLO attainment drops sharply while relaxed requests remain mostly satisfied, indicating that hidden drafting capacity is not directed to the requests that need timely progress most.
+
+These two failure modes suggest that speculative serving needs a different abstraction. Drafting capacity should not be treated as free simply because it is hidden behind target verification, and speculative budget should not be chosen independently for each request. Instead, the system needs to create a stable overlap window, estimate which requests are at risk of SLO violation before their next normal turn, and spend the verification budget on candidate tokens that are likely to become accepted progress.
+
+\section*{Key Ideas}
+
+\system addresses these limitations by separating the execution structure that creates drafting capacity from the control policy that allocates it. Instead of treating speculative parallelism as a request-local latency-hiding technique, \system treats hidden drafting windows as batch-level resources that should be scheduled according to SLO urgency and expected acceptance. Figure~\ref{fig:overview} summarizes the three mechanisms that implement this idea.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{figures/fig2.pdf}
+\caption{Overview of \system. The system creates a stable drafting window with dual-batch execution, uses rolling eager continuation to advance urgent requests ahead of their normal turn, and shapes per-request speculative budgets under a global verification budget.}
+\vspace{-10pt}
+\label{fig:overview}
+\end{figure}
+
+First, the Dual-Batch Execution Pipeline organizes active requests into two alternating logical batches. In each service step, the target model verifies one batch while the draft model prepares candidate tokens for the other batch; the two batches swap roles in the next step. This structure hides drafting work inside the complementary verification window and gives the scheduler a predictable drafting window. Second, Rolling Eager Continuation uses residual drafting capacity to advance urgent requests before their normal batch turn. If the target model fully accepts the current prefix, the ahead-of-turn continuation becomes a ready proposal for the next verification step; if any dependent token is rejected, the continuation is discarded and the request resumes drafting from the verified prefix. Because eager continuations are only proposals and every emitted token is still verified by the target model, the mechanism preserves exact generation correctness.
+
+Third, Individual Speculative Budget Shaping decides how many candidate tokens each request receives under a bounded verification budget. Since target verification cost grows with the total number of candidates, \system uses offline profiling to select a roofline-guided budget that keeps verification in a low-latency region. Within that budget, \system first allocates high-confidence candidates to requests with projected progress gaps, then assigns the remaining slots according to residual urgency and draft confidence. This policy avoids spending speculative capacity on requests with sufficient slack or on continuations unlikely to be accepted.
+
+\section*{Overview of Results}
+
+We implement \system on top of nano-vLLM and evaluate it on a single node with 4 NVIDIA A100 80GB GPUs. The evaluation uses Llama3.1-70B-Instruct and Qwen3-32B as target models, paired with Llama3.2-1B-Instruct and Qwen3-0.6B draft models. We compare against SpecInfer~\cite{specinfer}, AdaServe~\cite{adaserve}, and PEARL~\cite{pearl} under heterogeneous online workloads that mix tight code-completion requests, normal chatbot requests, and relaxed summarization requests.
+
+\system consistently improves both goodput and SLO attainment under high batch pressure and online traffic. At active batch size 64, it reaches 721.3 tokens/s goodput and 80.7\% SLO attainment on Llama3.1-70B-Instruct, outperforming AdaServe by $1.27\times$ in goodput and raising attainment from 61.4\% to 80.7\%. On Qwen3-32B, it reaches 764.8 tokens/s and 76.4\% attainment, improving goodput over AdaServe by $1.20\times$. Under online arrivals at 4 requests per second, \system sustains 603.3 tokens/s on Llama3.1-70B and 711.0 tokens/s on Qwen3-32B while maintaining the highest SLO attainment among all evaluated systems.
+
+The gains come from the combination of the three mechanisms rather than from overlap alone. A cumulative ablation shows that adding only the dual-batch pipeline to vanilla speculative decoding decreases goodput from 182.4 to 150.4 tokens/s, because a stable overlap window is not useful unless it is assigned to urgent requests. Adding Rolling Eager Continuation increases goodput to 392.5 tokens/s and SLO attainment to 59.8\%. Enabling Individual Speculative Budget Shaping further improves goodput to 723.0 tokens/s and SLO attainment to 85.9\%. These results support the central claim: speculative LLM serving under heterogeneous SLOs should allocate hidden drafting capacity as a scarce, SLO-aware resource, not merely hide draft latency opportunistically.
+
+\section*{Summary}
+
+\system shows that high-goodput LLM serving under heterogeneous SLOs requires co-designing execution overlap and scheduling control. Serial speculative decoding gives each request a tunable budget but exposes the cost of that budget to the entire batch. Parallel speculative decoding hides some drafting cost but can spend the hidden work on invalid prefixes or on requests that already have enough slack. \system bridges these two directions by first creating a predictable drafting window and then assigning that window to requests with both urgent progress needs and high expected acceptance.
+
+This design turns speculative decoding from a per-request acceleration primitive into a serving-level resource allocation mechanism. The resulting system improves goodput because it preserves timely progress for tight-SLO requests without letting low-value speculative work dominate verification capacity. More broadly, \system suggests that future LLM serving systems should reason about speculative tokens as shared, SLO-sensitive resources, especially as production workloads increasingly mix interactive and background generation on the same hardware.
+
+\clearpage
+
+\begin{thebibliography}{10}
+\bibitem{vllm}
+Woosuk Kwon, Zhuohan Li, Siyuan Zhuang, Ying Sheng, Lianmin Zheng, Cody Hao Yu, Joseph Gonzalez, Hao Zhang, and Ion Stoica.
+\newblock Efficient Memory Management for Large Language Model Serving with PagedAttention.
+\newblock In SOSP, 2023.
+
+\bibitem{adaspec}
+Kaiyu Huang, Hao Wu, Zhubo Shi, Han Zou, Minchen Yu, and Qingjiang Shi.
+\newblock AdaSpec: Adaptive Speculative Decoding for Fast, SLO-Aware Large Language Model Serving.
+\newblock In SoCC, 2025.
+
+\bibitem{adaserve}
+Zikun Li, Zhuofu Chen, Remi Delacourt, Gabriele Oliaro, Zeyu Wang, Qinghan Chen, Shuhuai Lin, April Yang, Zhihao Zhang, Zhuoming Chen, Yi-Hsiang Lai, Xinhao Cheng, Xupeng Miao, and Zhihao Jia.
+\newblock AdaServe: Accelerating Multi-SLO LLM Serving with SLO-Customized Speculative Decoding.
+\newblock In EuroSys, 2026.
+
+\bibitem{pearl}
+Tianyu Liu, Yun Li, Qitan Lv, Kai Liu, Jianchen Zhu, Winston Hu, and Xiao Sun.
+\newblock PEARL: Parallel Speculative Decoding with Adaptive Draft Length.
+\newblock In ICLR, 2025.
+
+\bibitem{specinfer}
+Xupeng Miao, Gabriele Oliaro, Zhihao Zhang, Xinhao Cheng, Zeyu Wang, Zhengxin Zhang, Rae Ying Yee Wong, Alan Zhu, Lijie Yang, Xiaoxiang Shi, Chunan Shi, Zhuoming Chen, Daiyaan Arfeen, Reyna Abhyankar, and Zhihao Jia.
+\newblock SpecInfer: Accelerating Large Language Model Serving with Tree-Based Speculative Inference and Verification.
+\newblock In ASPLOS, 2024.
+
+\bibitem{swift}
+Ziyi Zhang, Ziheng Jiang, Chengquan Jiang, Menghan Yu, Size Zheng, Haibin Lin, Xin Liu, and Henry Hoffmann.
+\newblock SwiftSpec: Disaggregated Speculative Decoding and Fused Kernels for Low-Latency LLM Inference.
+\newblock In ASPLOS, 2026.
+\end{thebibliography}
+
+\end{document}
