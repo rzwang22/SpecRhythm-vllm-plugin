@@ -1,4 +1,6 @@
 .DS_Store
+paper/
+figures/
 __pycache__/
 *.py[cod]
 *.egg-info/
