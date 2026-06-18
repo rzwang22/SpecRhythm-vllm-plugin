@@ -31,6 +31,7 @@ def main() -> None:
     load_general_plugins()
     print("VLLM_PLUGINS:", os.environ.get("VLLM_PLUGINS", ""))
     print("vLLM version:", importlib.metadata.version("vllm"))
+    print("vLLM __version__:", getattr(vllm, "__version__", "<missing>"))
     print("vLLM package:", Path(vllm.__file__).resolve().parent)
     print()
     print("Module availability:")
