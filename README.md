@@ -52,16 +52,12 @@ speculative decoding patches. Those APIs are not stable across vLLM releases.
 |-- benchmarks/
 |   |-- datasets/
 |   `-- results/
-|-- figures/
-|-- paper/
-|   |-- ATC26_#1664_SpecRhythm.pdf
-|   |-- ATC26_#1664_SpecRhythm_extended_abstract.pdf
-|   |-- ATC26_SpecRhythm.pdf
-|   |-- ATC26_SpecRhythm__two_page_extended_abstract_.pdf
-|   `-- ATC26_SpecRhythm_extended_abstract_revised.tex
 |-- scripts/
+|   |-- check_vllm_plugin.py
 |   |-- inspect_vllm.py
-|   `-- run_smoke_import.py
+|   |-- run_smoke_import.py
+|   |-- run_vllm_ar_smoke.py
+|   `-- run_vllm_spec_smoke.py
 `-- src/
     `-- vllm_specrhythm/
         |-- config.py
@@ -108,13 +104,25 @@ Install vLLM and this plugin. If vLLM is already installed in the server
 environment, install only this package:
 
 ```bash
-python -m pip install -e .
+uv pip install -e .
 ```
 
 If vLLM is not installed yet, use the pinned extra:
 
 ```bash
-python -m pip install -e ".[vllm]"
+uv pip install -e ".[vllm]"
+```
+
+Run the package-only smoke test:
+
+```bash
+python scripts/run_smoke_import.py
+```
+
+Verify that vLLM discovers the plugin through `vllm.general_plugins`:
+
+```bash
+python scripts/check_vllm_plugin.py
 ```
 
 Inspect the server-side vLLM installation:
@@ -123,7 +131,7 @@ Inspect the server-side vLLM installation:
 python scripts/inspect_vllm.py
 ```
 
-Verify that vLLM loads the plugin:
+The direct equivalent shell check is:
 
 ```bash
 VLLM_PLUGINS=specrhythm python -c "import vllm"
@@ -134,6 +142,35 @@ You should see:
 ```text
 [SpecRhythm] plugin loaded (target vLLM version: 0.23.0)
 ```
+
+## Baseline Smoke Tests
+
+Run a small autoregressive vLLM generation test first. Use a small local model
+or Hugging Face model that is already available on the server:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python scripts/run_vllm_ar_smoke.py \
+  --model /path/to/model \
+  --tp 1 \
+  --max-tokens 32
+```
+
+Then run vLLM's built-in draft-model speculative decoding path:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1 python scripts/run_vllm_spec_smoke.py \
+  --target-model /path/to/target-model \
+  --draft-model /path/to/draft-model \
+  --target-tp 1 \
+  --draft-tp 1 \
+  --num-speculative-tokens 5 \
+  --max-tokens 32
+```
+
+For the paper-scale setup, use the target and draft model pair described by
+SpecRhythm, for example Qwen3-32B with Qwen3-0.6B or Llama3.1-70B-Instruct with
+Llama3.2-1B-Instruct, and adjust tensor parallel sizes to match the available
+GPUs.
 
 ## Development Milestones
 
@@ -150,7 +187,6 @@ You should see:
 
 ## Related Work
 
-- SpecRhythm paper materials are stored in `paper/`.
 - MineDraft is a useful example of a vLLM out-of-tree patch plugin for parallel
   speculative decoding.
 - nano-PEARL is a useful reference for draft-target disaggregation and parallel
