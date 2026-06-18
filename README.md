@@ -152,6 +152,8 @@ or Hugging Face model that is already available on the server:
 CUDA_VISIBLE_DEVICES=0 python scripts/run_vllm_ar_smoke.py \
   --model /path/to/model \
   --tp 1 \
+  --gpu-memory-utilization 0.3 \
+  --max-model-len 4096 \
   --max-tokens 32
 ```
 
@@ -164,6 +166,8 @@ CUDA_VISIBLE_DEVICES=0,1 python scripts/run_vllm_spec_smoke.py \
   --target-tp 1 \
   --draft-tp 1 \
   --num-speculative-tokens 5 \
+  --gpu-memory-utilization 0.3 \
+  --max-model-len 4096 \
   --max-tokens 32
 ```
 
@@ -171,6 +175,13 @@ For the paper-scale setup, use the target and draft model pair described by
 SpecRhythm, for example Qwen3-32B with Qwen3-0.6B or Llama3.1-70B-Instruct with
 Llama3.2-1B-Instruct, and adjust tensor parallel sizes to match the available
 GPUs.
+
+On a shared GPU, vLLM may fail during startup if the requested memory fraction
+exceeds currently free GPU memory. For smoke tests, start conservatively with
+`--gpu-memory-utilization 0.3 --max-model-len 4096`. If CUDA graph capture or
+compilation causes additional pressure, add `--enforce-eager` for the smoke
+test. Increase these values only after confirming the GPU is mostly idle with
+`nvidia-smi`.
 
 ## Development Milestones
 

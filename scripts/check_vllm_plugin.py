@@ -11,6 +11,9 @@ def main() -> None:
     os.environ.setdefault("VLLM_PLUGINS", "specrhythm")
 
     import vllm  # noqa: PLC0415
+    from vllm.plugins import load_general_plugins  # noqa: PLC0415
+
+    load_general_plugins()
 
     print("VLLM_PLUGINS:", os.environ.get("VLLM_PLUGINS", ""))
     print("vLLM version:", importlib.metadata.version("vllm"))

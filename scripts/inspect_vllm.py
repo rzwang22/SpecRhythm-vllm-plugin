@@ -7,6 +7,8 @@ import importlib.metadata
 import os
 from pathlib import Path
 
+os.environ.setdefault("VLLM_PLUGINS", "specrhythm")
+
 import vllm
 
 
@@ -24,6 +26,9 @@ MODULES_TO_CHECK = [
 
 
 def main() -> None:
+    from vllm.plugins import load_general_plugins
+
+    load_general_plugins()
     print("VLLM_PLUGINS:", os.environ.get("VLLM_PLUGINS", ""))
     print("vLLM version:", importlib.metadata.version("vllm"))
     print("vLLM package:", Path(vllm.__file__).resolve().parent)
